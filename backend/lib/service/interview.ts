@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { INTERVIEW_DURATION_MINUTES, type InterviewFeedback, type InterviewMessage, type InterviewReport, type InterviewSessionView, type InterviewTurn } from "../../../shared/interview";
+import { INTERVIEW_DURATION_MINUTES, type InterviewFeedback, type InterviewMessage, type InterviewProfile, type InterviewReport, type InterviewSessionView, type InterviewTurn } from "../../../shared/interview";
+import { legacyInterviewProfile, normalizeInterviewProfile } from "./interviewProfile";
 
 export class InterviewError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
 interface Session {
+  profile?: InterviewProfile;
   messages: InterviewMessage[];
   turns: InterviewTurn[];
   timeline: number;
@@ -57,6 +59,7 @@ export class InterviewStore {
         throw new Error("Invalid saved session");
       }
       const session: Session = { ...saved, pendingReply: undefined, reportPromise: undefined };
+      if (saved.profile !== undefined) session.profile = normalizeInterviewProfile(saved.profile?.resume, saved.profile?.jobDescription);
       // A model stream cannot survive a process restart. Keep the answer, allow retry with its original ID.
       for (const turn of session.turns) {
         if (turn.status === "pending") turn.status = "failed";
@@ -77,13 +80,14 @@ export class InterviewStore {
       status: session.report ? "finished" : session.ended ? (session.reportPromise ? "finishing" : "report_error") : "active",
       lastTurn: session.turns.at(-1) ? { ...session.turns.at(-1)! } : undefined,
       report: session.report,
+      profile: session.profile ? { ...session.profile } : undefined,
     };
   }
 
   findTurn(sessionId: string, requestId: string, content: string) {
     const session = this.load(sessionId);
     const turn = session?.turns.find((entry) => entry.requestId === requestId);
-    if (turn && session!.messages.find((message) => message.id === turn.userMessageId)?.content !== content) {
+    if (turn && (turn.kind === "opening" || session!.messages.find((message) => message.id === turn.userMessageId)?.content !== content)) {
       throw new InterviewError(409, "同一个请求 ID 不能用于不同的回答");
     }
     return turn;
@@ -100,6 +104,41 @@ export class InterviewStore {
 
   getMemory(sessionId: string) { return this.load(sessionId)?.memory; }
 
+  getProfile(sessionId: string): InterviewProfile {
+    const session = this.load(sessionId);
+    if (!session) throw new InterviewError(404, "未找到本场面试记录");
+    return { ...(session.profile ?? legacyInterviewProfile()) };
+  }
+
+  findOpening(sessionId: string, requestId: string, profile: InterviewProfile) {
+    const session = this.load(sessionId);
+    if (!session) return undefined;
+    const opening = session.turns[0];
+    if (opening?.kind !== "opening" || opening.requestId !== requestId ||
+        session.profile?.resume !== profile.resume || session.profile?.jobDescription !== profile.jobDescription) {
+      throw new InterviewError(409, "本场面试已创建，资料不能更改；请恢复面试或开始新面试");
+    }
+    return opening;
+  }
+
+  beginOpening(sessionId: string, profile: InterviewProfile, requestId: string) {
+    profile = normalizeInterviewProfile(profile.resume, profile.jobDescription);
+    let turn = this.findOpening(sessionId, requestId, profile);
+    let session = this.load(sessionId);
+    if (!session) {
+      session = { profile: { ...profile }, messages: [], turns: [], timeline: 0, startedAt: Date.now(), ended: false };
+      this.sessions.set(sessionId, session);
+    }
+    if (session.ended || session.pendingReply || (turn && (turn.status !== "failed" || turn !== session.turns.at(-1)))) {
+      throw new InterviewError(409, "开场已处理，请恢复最新面试记录");
+    }
+    if (!turn) {
+      turn = { kind: "opening", requestId, assistantMessageId: randomUUID(), status: "pending" };
+      session.turns.push(turn);
+    }
+    return { previousMessages: [] as InterviewMessage[], ...this.trackReply(sessionId, session, turn) };
+  }
+
   updateMemory(sessionId: string, userMessageId: string, memory: unknown) {
     const session = this.load(sessionId);
     if (!session || !memory || typeof memory !== "object" || Array.isArray(memory)) return;
@@ -112,7 +151,7 @@ export class InterviewStore {
     this.save(sessionId, session);
   }
 
-  beginTurn(sessionId: string, content: string, requestId = randomUUID(), timeline = 0) {
+  beginTurn(sessionId: string, content: string, requestId: string = randomUUID(), timeline = 0) {
     let session = this.load(sessionId);
     if (!session) {
       session = { messages: [], turns: [], timeline: 0, startedAt: Date.now(), ended: false };
@@ -132,13 +171,17 @@ export class InterviewStore {
       : { id: randomUUID(), role: "user", content, timestamp: Date.now() };
     const previousMessages = session.messages.slice(0, turn ? session.messages.findIndex((message) => message.id === userMessage.id) : session.messages.length);
     if (!turn) {
-      turn = { requestId, userMessageId: userMessage.id, assistantMessageId: randomUUID(), status: "pending" };
+      turn = { kind: "answer", requestId, userMessageId: userMessage.id, assistantMessageId: randomUUID(), status: "pending" };
       session.messages.push(userMessage);
       session.turns.push(turn);
     }
+    session.timeline = Math.max(session.timeline, Math.min(INTERVIEW_DURATION_MINUTES, timeline));
+    return { userMessage, previousMessages, ...this.trackReply(sessionId, session, turn) };
+  }
+
+  private trackReply(sessionId: string, session: Session, turn: InterviewTurn) {
     turn.status = "pending";
     delete turn.channel;
-    session.timeline = Math.max(session.timeline, Math.min(INTERVIEW_DURATION_MINUTES, timeline));
     try { this.save(sessionId, session); } catch {
       turn.status = "failed";
       throw new InterviewError(503, "面试记录保存失败，请检查服务端存储后重试");
@@ -147,7 +190,7 @@ export class InterviewStore {
     session.pendingReply = new Promise<void>((resolve) => { resolveReply = resolve; });
     let completed = false;
     return {
-      userMessage, assistantMessageId: turn.assistantMessageId, previousMessages,
+      assistantMessageId: turn.assistantMessageId,
       setChannel: (channel: string) => { turn.channel = channel; },
       complete: (reply?: string) => {
         if (completed) return;
@@ -170,7 +213,7 @@ export class InterviewStore {
     };
   }
 
-  finish(sessionId: string, generate: (messages: readonly InterviewMessage[]) => Promise<InterviewFeedback>): Promise<InterviewReport> {
+  finish(sessionId: string, generate: (messages: readonly InterviewMessage[], profile: InterviewProfile) => Promise<InterviewFeedback>): Promise<InterviewReport> {
     const session = this.load(sessionId);
     if (!session) throw new InterviewError(404, "未找到本场面试，请先完成对话");
     if (session.report) return Promise.resolve(session.report);
@@ -182,10 +225,11 @@ export class InterviewStore {
       await session.pendingReply;
       session.snapshot ??= session.messages.map((message) => ({ ...message }));
       this.save(sessionId, session);
-      const feedback = await generate(session.snapshot);
+      const feedback = await generate(session.snapshot, this.getProfile(sessionId));
       const report: InterviewReport = {
         ...feedback, sessionId, generatedAt: Date.now(), durationMinutes: session.timeline,
         messages: session.snapshot,
+        ...(session.profile ? { profile: { ...session.profile } } : {}),
       };
       session.report = report;
       try { this.save(sessionId, session); } catch (error) { session.report = undefined; throw error; }

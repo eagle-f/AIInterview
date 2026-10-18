@@ -4,6 +4,7 @@ import Timeline from "./Timeline.vue";
 import ChatDisplay from "./ChatDisplay.vue";
 import MessageInput from "./MessageInput.vue";
 import FeedbackPanel from "./FeedbackPanel.vue";
+import InterviewSetupDialog from "./InterviewSetupDialog.vue";
 import { INTERVIEW_DURATION_MINUTES } from "../../shared/interview";
 import {
   messages,
@@ -24,12 +25,18 @@ import {
   retryLastAnswer,
   restoreInterview,
   startNewInterview,
+  pendingStart,
+  setupDraft,
+  setupStep,
+  setupError,
+  setupOpen,
+  startInterview,
 } from "../lib/client";
 
 // 面试总时长（分钟）
 const totalDuration = INTERVIEW_DURATION_MINUTES;
 // 面试是否已开始（第一轮对话开始后启动计时）
-const started = computed(() => hasInterview.value && connectionStatus.value === "ready" && !canRetryAnswer.value);
+const started = computed(() => hasInterview.value && !pendingStart.value && connectionStatus.value === "ready" && !canRetryAnswer.value);
 const voiceBusy = ref(false);
 const chatDisplay = ref<InstanceType<typeof ChatDisplay> | null>(null);
 const activeView = ref<"chat" | "feedback">(report.value ? "feedback" : "chat");
@@ -70,18 +77,22 @@ const updateTime = (time: number) => {
     <div class="main">
       <header class="interview-header">
         <div>
-          <h1>前端模拟面试</h1>
-          <p>{{ interviewStatus === 'active' ? '围绕你的经历，逐步深入交流' : '面试已结束，回顾表现与改进方向' }}</p>
+          <h1>AI 模拟面试</h1>
+          <p>{{ !hasInterview ? '先填写简历和岗位信息，准备好后开始面试' : interviewStatus === 'active' ? '围绕你的经历，逐步深入交流' : '面试已结束，回顾表现与改进方向' }}</p>
         </div>
         <button
           v-if="interviewStatus === 'active'"
           type="button"
           class="finish-button"
-          :disabled="(!hasInterview && !sending) || voiceBusy || connectionStatus !== 'ready'"
+          :disabled="!hasInterview || !!pendingStart || voiceBusy || connectionStatus !== 'ready'"
           @click="finishInterview"
         >结束面试并生成反馈</button>
         <button v-if="report || connectionStatus === 'offline'" type="button" class="secondary-button" @click="startNewInterview">开始新面试</button>
       </header>
+      <section v-if="!hasInterview && !setupOpen" class="report-status">
+        <p>填写简历和职位 JD，让面试问题更贴合你的经历。</p>
+        <button type="button" class="finish-button" @click="setupOpen = true">准备面试</button>
+      </section>
       <section v-if="recoveryNotice" class="recovery-status" role="status" aria-live="polite">
         <p>{{ recoveryNotice }}</p>
         <button v-if="connectionStatus === 'offline'" type="button" class="finish-button" :disabled="sending" @click="restoreInterview">恢复面试</button>
@@ -113,12 +124,18 @@ const updateTime = (time: number) => {
 
       <!-- 输入窗口 -->
       <MessageInput
-        v-if="interviewStatus === 'active'"
+        v-if="hasInterview && !pendingStart && interviewStatus === 'active'"
         :disabled="buttonDisabled"
         @send-message="sendMessage"
         @voice-busy="voiceBusy = $event"
       />
     </div>
+    <InterviewSetupDialog
+      v-if="setupOpen" v-model:draft="setupDraft" v-model:step="setupStep"
+      :busy="sending" :locked="!!pendingStart" :disabled="connectionStatus !== 'ready'"
+      :error="setupError || (connectionStatus === 'offline' ? recoveryNotice : '')"
+      @start="startInterview" @close="setupOpen = false" @restore="restoreInterview" @restart="startNewInterview"
+    />
   </div>
 </template>
 

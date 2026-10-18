@@ -14,7 +14,7 @@ export function attachASRWebSocket(wss: WebSocketServer) {
       clientWs.send(
         JSON.stringify({
           type: "asr_error",
-          message: "后端未配置 STT_API_KEY，请在 backend/.env 中补充后重启",
+          message: "语音识别未配置：桌面版请在“应用 → API 设置”中填写 STT_API_KEY；网页版请修改项目根目录的 .env.local 并重启后端",
         }),
       );
       clientWs.close();

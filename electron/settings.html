@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>API 设置 · AIInterview</title>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <main>
+    <header><span class="eyebrow">AIINTERVIEW</span><h1>连接你的 AI 服务</h1><p>模型配置为必填项。语音配置可留空，使用文字完成面试。</p></header>
+    <form id="settings">
+      <fieldset><legend>对话模型</legend>
+        <label>API 密钥 <span>DEEPSEEK_API_KEY</span><input name="DEEPSEEK_API_KEY" type="password" autocomplete="off" required></label>
+        <label>接口地址 <span>BASE_URL</span><input name="BASE_URL" type="url" placeholder="https://你的服务商地址/v1" required><small>填写兼容 OpenAI API 的基础地址，沿用网页版配置即可。</small></label>
+        <label>模型名称 <span>AI_MODEL</span><input name="AI_MODEL" autocomplete="off" required></label>
+      </fieldset>
+      <fieldset><legend>语音服务 <em>可选</em></legend>
+        <label>语音识别密钥 <span>STT_API_KEY</span><input name="STT_API_KEY" type="password" autocomplete="off"></label>
+        <label>语音合成密钥 <span>TTS_API_KEY</span><input name="TTS_API_KEY" type="password" autocomplete="off"></label>
+        <div class="row"><label>合成资源 ID <span>TTS_RESOURCE_ID</span><input name="TTS_RESOURCE_ID" autocomplete="off"></label><label>音色名称 <span>TTS_VOICE_NAME</span><input name="TTS_VOICE_NAME" autocomplete="off"></label></div>
+        <small>使用项目现有的火山引擎语音服务；语音合成的三项配置需同时填写。</small>
+      </fieldset>
+      <p class="note">配置通过操作系统加密保存在本机。保存后会重新连接后端，请等当前回复完成后再保存。已保存的面试记录会保留。</p>
+      <div class="actions"><p id="status" role="status" aria-live="polite"></p><button id="save" type="submit">保存并重新连接</button></div>
+    </form>
+  </main>
+  <script src="settings.js"></script>
+</body>
+</html>

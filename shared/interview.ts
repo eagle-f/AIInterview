@@ -1,4 +1,11 @@
 export const INTERVIEW_DURATION_MINUTES = 32;
+export const RESUME_MAX_LENGTH = 20_000;
+export const JD_MAX_LENGTH = 10_000;
+
+export interface InterviewProfile {
+  resume: string;
+  jobDescription: string;
+}
 
 export interface InterviewMessage {
   id: string;
@@ -36,11 +43,13 @@ export interface InterviewReport extends InterviewFeedback {
   generatedAt: number;
   durationMinutes: number;
   messages: InterviewMessage[];
+  profile?: InterviewProfile;
 }
 
 export interface InterviewTurn {
   requestId: string;
-  userMessageId: string;
+  kind?: "opening" | "answer";
+  userMessageId?: string;
   assistantMessageId: string;
   status: "pending" | "completed" | "failed";
   channel?: string;
@@ -53,4 +62,5 @@ export interface InterviewSessionView {
   status: "active" | "finishing" | "finished" | "report_error";
   lastTurn?: InterviewTurn;
   report?: InterviewReport;
+  profile?: InterviewProfile;
 }

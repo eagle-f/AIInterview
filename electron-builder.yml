@@ -1,0 +1,37 @@
+appId: com.aiinterview.desktop
+productName: AIInterview
+# Reuse the runtime installed by the project's Electron package.
+electronDist: node_modules/electron/dist
+directories:
+  output: release
+files:
+  - electron/**
+  - dist/**
+  - dist-electron/**
+  - package.json
+  - '!**/*.map'
+  - '!**/.env*'
+  - '!**/.data/**'
+asar: true
+npmRebuild: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: AIInterview-Setup-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AIInterview
+  deleteAppDataOnUninstall: false
+mac:
+  target: dmg
+  category: public.app-category.education
+  extendInfo:
+    NSMicrophoneUsageDescription: 用于语音输入模拟面试回答
+linux:
+  target: AppImage
+  category: Education

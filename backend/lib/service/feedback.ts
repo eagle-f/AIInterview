@@ -1,11 +1,12 @@
 import OpenAI from "openai";
 import feedbackPrompt from "../prompt/feedback.prompt";
-import jobDescription from "../prompt/jd.prompt";
+import { legacyInterviewProfile } from "./interviewProfile";
 import {
   FEEDBACK_DIMENSIONS,
   type FeedbackDimension,
   type InterviewFeedback,
   type InterviewMessage,
+  type InterviewProfile,
 } from "../../../shared/interview";
 
 export type FeedbackCompletion = (input: string, correction?: string) => Promise<string>;
@@ -76,10 +77,11 @@ export function parseFeedback(raw: string, messages: readonly InterviewMessage[]
 export async function generateFeedback(
   messages: readonly InterviewMessage[],
   complete: FeedbackCompletion,
+  profile?: InterviewProfile,
 ): Promise<InterviewFeedback> {
-  const input = JSON.stringify({ transcript: messages });
+  const input = JSON.stringify({ profile, transcript: messages });
   // Never silently truncate evidence used for a report.
-  if (input.length > 80_000) throw new FeedbackInputError("本场记录超过 80,000 字符，暂不支持生成完整反馈，请缩短下一场面试的内容");
+  if (input.length > 80_000) throw new FeedbackInputError("本场资料和记录超过 80,000 字符，暂不支持生成完整反馈，请缩短下一场面试的内容");
   let correction: string | undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
     const raw = await complete(input, correction);
@@ -94,7 +96,7 @@ export async function generateFeedback(
 }
 
 export function createFeedbackGenerator(config: { apiKey: string; endpoint: string; model: string }) {
-  return async (messages: readonly InterviewMessage[]) => {
+  return async (messages: readonly InterviewMessage[], profile: InterviewProfile = legacyInterviewProfile()) => {
     if (!config.apiKey || !config.endpoint || !config.model) throw new Error("模型服务未配置");
     const client = new OpenAI({
       apiKey: config.apiKey,
@@ -110,12 +112,12 @@ export function createFeedbackGenerator(config: { apiKey: string; endpoint: stri
         max_tokens: 4000,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: `${feedbackPrompt}\n\n岗位要求：\n${jobDescription}` },
+          { role: "system", content: feedbackPrompt },
           ...(correction ? [{ role: "system" as const, content: `上一次输出校验未通过：${correction}。请重新严格按规则输出。` }] : []),
           { role: "user", content: input },
         ],
       });
       return response.choices[0]?.message.content ?? "";
-    });
+    }, profile);
   };
 }

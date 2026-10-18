@@ -9,7 +9,13 @@ import type { InterviewMessage } from "../../shared/interview";
 
 /** Deterministic local model fixture; never calls a paid model or speech service. */
 export function feedbackFixture(messages: readonly InterviewMessage[]) {
-  const answer = messages.find((message) => message.role === "user")!;
+  const answer = messages.find((message) => message.role === "user");
+  if (!answer) return {
+    summary: "本场尚未回答问题，暂无足够依据评价表现。",
+    dimensions: ["technical", "project", "reasoning", "communication"].map((id) => ({
+      id, level: "not_covered", assessment: "候选人尚未回答问题，无法评价。", strengths: [], improvements: [], evidence: [],
+    })),
+  };
   return {
     summary: "本场主要交流了组件库维护经历，能够说明个人职责。技术原理和复杂问题分析尚未充分展开，以下反馈仅针对已表达的内容。",
     dimensions: [

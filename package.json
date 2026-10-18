@@ -1,14 +1,24 @@
 {
   "name": "aiinterview",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "AI 模拟面试与面试反馈桌面应用",
+  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "server": "jiti ./backend/server.ts",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --import jiti/register --test tests/feedback.test.ts tests/recovery.test.ts"
+    "test": "node --import jiti/register --test tests/feedback.test.ts tests/recovery.test.ts tests/interview-setup.test.ts tests/desktop.test.cjs",
+    "build:electron": "node scripts/build-electron.mjs",
+    "build:desktop": "pnpm build && pnpm build:electron",
+    "desktop:dev": "pnpm build:electron && electron . --dev",
+    "desktop:preview": "pnpm build:desktop && electron .",
+    "desktop:pack": "pnpm build:desktop && electron-builder --dir --publish never",
+    "desktop:dist": "pnpm build:desktop && electron-builder --win --x64 --publish never",
+    "desktop:smoke": "node scripts/smoke-electron.mjs",
+    "desktop:verify": "node scripts/verify-package.mjs"
   },
   "dependencies": {
     "body-parser": "^2.3.0",
@@ -21,6 +31,9 @@
     "vue": "^3.5.42",
     "ws": "^8.21.3"
   },
+  "engines": {
+    "node": ">=22.14.0"
+  },
   "devDependencies": {
     "@types/body-parser": "^1.19.6",
     "@types/express": "^5.0.6",
@@ -29,6 +42,9 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vue-tsc": "^3.3.11"

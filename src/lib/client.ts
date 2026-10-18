@@ -1,8 +1,8 @@
 import { computed, ref, watch } from "vue";
-import type { InterviewMessage, InterviewReport, InterviewSessionView, InterviewTurn } from "../../shared/interview";
+import { JD_MAX_LENGTH, RESUME_MAX_LENGTH, type InterviewMessage, type InterviewProfile, type InterviewReport, type InterviewSessionView, type InterviewTurn } from "../../shared/interview";
 import { StreamingSpeechPlayer } from "./streamingSpeechPlayer";
 import { delay, HttpError, requestJson, retryable } from "./http";
-import { clearSessionCache, readSessionCache, writeSessionCache, type PendingAnswer } from "./sessionCache";
+import { clearSessionCache, readSessionCache, writeSessionCache, type PendingAnswer, type PendingStart } from "./sessionCache";
 
 const cached = readSessionCache();
 const sessionId = cached?.sessionId ?? crypto.randomUUID();
@@ -14,8 +14,14 @@ export const interviewStatus = ref<InterviewSessionView["status"]>(cached?.repor
 export const connectionStatus = ref<"ready" | "restoring" | "reconnecting" | "offline">(cached ? "restoring" : "ready");
 export const recoveryNotice = ref("");
 export const pendingAnswer = ref<PendingAnswer | null>(cached?.pending ?? null);
+export const pendingStart = ref<PendingStart | null>(cached?.pendingStart ?? null);
+export const profile = ref<InterviewProfile | null>(cached?.profile ?? null);
+export const setupDraft = ref<InterviewProfile>(cached?.setupDraft ?? { resume: "", jobDescription: "" });
+export const setupStep = ref<1 | 2>(cached?.setupStep === 2 ? 2 : 1);
+export const setupError = ref("");
+export const setupOpen = ref(!!pendingStart.value || !(cached?.hasInterview || cached?.messages.length || cached?.pending || cached?.report));
 export const canRetryAnswer = computed(() => !!pendingAnswer.value && !sending.value && interviewStatus.value === "active" && connectionStatus.value === "ready");
-export const buttonDisabled = computed(() => sending.value || interviewStatus.value !== "active" || connectionStatus.value !== "ready" || !!pendingAnswer.value);
+export const buttonDisabled = computed(() => !hasInterview.value || !!pendingStart.value || sending.value || interviewStatus.value !== "active" || connectionStatus.value !== "ready" || !!pendingAnswer.value);
 export const speechError = ref("");
 export const chatError = ref("");
 export const reportError = ref("");
@@ -29,13 +35,15 @@ let checkpointTime = currentTime.value;
 function saveCache() {
   if (resetting) return;
   writeSessionCache({ sessionId, timeline: currentTime.value, messages: messages.value, pending: pendingAnswer.value,
-    draft: draft.value, hasInterview: hasInterview.value, finishRequested, report: report.value });
+    draft: draft.value, hasInterview: hasInterview.value, finishRequested, report: report.value,
+    profile: profile.value, setupDraft: setupDraft.value, setupStep: setupStep.value, pendingStart: pendingStart.value });
 }
 watch([currentTime, draft], saveCache);
+watch([setupDraft, setupStep], saveCache, { deep: true });
 window.addEventListener("beforeunload", saveCache);
 
 watch(currentTime, (time) => {
-  if (!hasInterview.value || connectionStatus.value !== "ready" || interviewStatus.value !== "active" || time - checkpointTime < 0.25) return;
+  if (!hasInterview.value || pendingStart.value || connectionStatus.value !== "ready" || interviewStatus.value !== "active" || time - checkpointTime < 0.25) return;
   checkpointTime = time;
   void requestJson(`/api/interview/${sessionId}/progress`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timeline: time }),
@@ -72,11 +80,23 @@ function applySession(session: InterviewSessionView) {
   const pending = pendingAnswer.value;
   messages.value = session.messages;
   currentTime.value = Math.max(currentTime.value, session.timeline);
-  hasInterview.value = session.messages.length > 0;
+  hasInterview.value = session.messages.length > 0 || !!session.profile;
+  profile.value = session.profile ?? null;
   report.value = session.report ?? null;
   interviewStatus.value = finishRequested && session.status === "active" ? "finishing" : session.status;
   const turn = session.lastTurn;
-  if (turn && turn.status !== "completed") {
+  if (turn?.kind === "opening" && turn.status !== "completed" && session.status === "active" && session.profile) {
+    pendingStart.value = { requestId: turn.requestId, ...session.profile };
+    setupDraft.value = { ...session.profile };
+    setupStep.value = 2;
+    setupOpen.value = true;
+    if (turn.status === "failed") setupError.value = "开场回复未完成，资料已保存。点击“重试开始面试”继续。";
+  } else {
+    pendingStart.value = null;
+    setupOpen.value = false;
+    setupError.value = "";
+  }
+  if (turn && turn.kind !== "opening" && turn.status !== "completed") {
     const answer = session.messages.find((message) => message.id === turn.userMessageId);
     if (answer) {
       if (pending && pending.requestId !== turn.requestId && !draft.value) draft.value = pending.content;
@@ -85,7 +105,7 @@ function applySession(session: InterviewSessionView) {
   } else if (turn?.requestId === pending?.requestId || session.status !== "active") {
     pendingAnswer.value = null;
   }
-  chatError.value = turn?.status === "failed" ? "本轮回复未完成，你的回答已保存。点击“重试本轮回复”继续。" : "";
+  chatError.value = turn?.status === "failed" && turn.kind !== "opening" ? "本轮回复未完成，你的回答已保存。点击“重试本轮回复”继续。" : "";
   if (session.status === "report_error") reportError.value = "面试已结束，可以重新生成反馈。";
   if (session.report) { reportError.value = ""; pendingAnswer.value = null; }
   saveCache();
@@ -173,7 +193,7 @@ async function recover(initial?: InterviewSessionView, speak = false) {
       speechPlayer.cancel();
       if (error instanceof HttpError && error.status === 404 && !hasInterview.value) {
         connectionStatus.value = "ready";
-        recoveryNotice.value = pendingAnswer.value ? "上次回答尚未确认提交，可以重试发送。" : "已恢复输入草稿。";
+        recoveryNotice.value = pendingStart.value ? "开始请求尚未确认，可重试开始面试。" : pendingAnswer.value ? "上次回答尚未确认提交，可以重试发送。" : "已恢复输入草稿。";
         return;
       }
       if (attempt < 2 && (!(error instanceof HttpError) || retryable(error))) {
@@ -233,9 +253,46 @@ export function retryLastAnswer() {
   activeTurn = submitAnswer(pendingAnswer.value, true);
 }
 
+async function submitStart(start: PendingStart) {
+  sending.value = true;
+  setupError.value = "";
+  pendingStart.value = start;
+  saveCache();
+  speechPlayer.start();
+  try {
+    const data = await requestJson<{ session: InterviewSessionView }>("/api/interview/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, ...start, retry: true }),
+    }, { onRetry });
+    await recover(data.session, true);
+  } catch (error) {
+    speechPlayer.cancel();
+    if (error instanceof HttpError && !retryable(error) && error.status !== 409) {
+      pendingStart.value = null;
+      connectionStatus.value = "ready";
+    } else {
+      await recover();
+    }
+    if (setupOpen.value) setupError.value = error instanceof Error ? error.message : "开始面试失败，请重试";
+  } finally {
+    sending.value = false;
+    saveCache();
+  }
+}
+
+export function startInterview() {
+  if (sending.value || connectionStatus.value !== "ready" || (hasInterview.value && !pendingStart.value)) return;
+  if (!setupDraft.value.resume.trim() || setupDraft.value.resume.length > RESUME_MAX_LENGTH || setupDraft.value.jobDescription.length > JD_MAX_LENGTH) {
+    setupError.value = "请填写简历，并检查简历和 JD 是否超过长度限制。";
+    return;
+  }
+  activateSpeechOutput();
+  activeTurn = submitStart(pendingStart.value ?? { requestId: crypto.randomUUID(), resume: setupDraft.value.resume.trim(), jobDescription: setupDraft.value.jobDescription.trim() });
+}
+
 export function restoreInterview() {
   if (sending.value || interviewStatus.value === "finishing") return;
-  if (!cached && !hasInterview.value && !pendingAnswer.value) {
+  if (!hasInterview.value && !pendingAnswer.value && !pendingStart.value) {
     connectionStatus.value = "ready";
     recoveryNotice.value = "";
     return;
@@ -254,7 +311,7 @@ window.addEventListener("offline", () => {
 });
 
 export async function finishInterview() {
-  if (interviewStatus.value === "finishing" || report.value || (!hasInterview.value && !sending.value)) return;
+  if (pendingStart.value || interviewStatus.value === "finishing" || report.value || (!hasInterview.value && !sending.value)) return;
   finishRequested = true;
   saveCache();
   interviewStatus.value = "finishing";

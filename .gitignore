@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-electron/
+docs/
+release/
+.pnpm-store/
 *.local
 backend/.data/
 
